@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">EdgePass</string>
+    <string name="capture">Capture</string>
+    <string name="generate">Generate</string>
+    <string name="retake">Retake</string>
+    <string name="save">Save</string>
+    <string name="preview">Preview</string>
+    <string name="original">Original</string>
+    <string name="processed">Processed</string>
+    <string name="remove_background">Remove background</string>
+    <string name="processing">Processing...</string>
+    <string name="image_saved">Image saved to Gallery!</string>
+    <string name="save_failed">Failed to save image</string>
+    <string name="no_faces_detected">No faces detected</string>
+    <string name="faces_detected">%d face(s) detected</string>
+</resources>

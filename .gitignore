@@ -1,0 +1,47 @@
+# Compiled binaries and libraries
+/target
+*.so
+*.aar
+
+# Gradle
+.gradle/
+build/
+app/build/
+!app/src/main/jniLibs/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# Android
+local.properties
+*.apk
+*.ap_
+*.dex
+
+# Rust
+Cargo.lock
+.cargo/
+.rustc/
+*.pdb
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+*.keystore
+*.jks
+.env
+
+# Large model files (>100MB - download separately)
+*.onnx
+*.tflite
+*.h5
+*.pb
+
+# Generated files
+*.log

@@ -1,0 +1,17 @@
+[package]
+name = "edgepass_core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+log = "0.4"
+android-log = "0.13"
+image = "0.24"
+jni = "0.20"
+
+[profile.release]
+opt-level = 3
+lto = true
