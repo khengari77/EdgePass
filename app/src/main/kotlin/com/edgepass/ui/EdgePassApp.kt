@@ -28,9 +28,11 @@ import androidx.compose.ui.unit.dp
 import com.edgepass.lib.MlKitFaceDetector
 import com.edgepass.lib.PassportProcessor
 import com.edgepass.ui.screens.CameraScreen
+import java.io.ByteArrayOutputStream
 
 data class DetectedFace(
     val boundingBox: RectF,
+    val expandedBox: RectF,
     val confidence: Float
 )
 
@@ -43,6 +45,7 @@ fun EdgePassApp() {
 
     var currentScreen by remember { mutableStateOf("camera") }
     var capturedImageBytes by remember { mutableStateOf<ByteArray?>(null) }
+    var originalBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var processedImageBytes by remember { mutableStateOf<ByteArray?>(null) }
     var isProcessing by remember { mutableStateOf(false) }
     var selectedStandard by remember { mutableIntStateOf(PassportProcessor.STANDARD_SAUDI_EVISA) }
@@ -51,9 +54,18 @@ fun EdgePassApp() {
 
     LaunchedEffect(capturedImageBytes) {
         capturedImageBytes?.let { bytes ->
-            faceDetector.detectFromBytes(bytes) { faces ->
-                detectedFaces = faces.map { DetectedFace(it.boundingBox, it.confidence) }
-                Log.d("EdgePassApp", "Detected ${faces.size} faces")
+            originalBitmap = decodeBitmap(bytes)
+            originalBitmap?.let { bitmap ->
+                faceDetector.detect(bitmap) { faces ->
+                    detectedFaces = faces.map {
+                        DetectedFace(
+                            boundingBox = it.boundingBox,
+                            expandedBox = it.expandedBox,
+                            confidence = it.confidence
+                        )
+                    }
+                    Log.d("EdgePassApp", "Detected ${faces.size} faces")
+                }
             }
         }
     }
@@ -85,31 +97,38 @@ fun EdgePassApp() {
                 }
                 "preview" -> {
                     PreviewScreen(
-                        originalImage = capturedImageBytes?.let { decodeBitmap(it) },
+                        originalImage = originalBitmap,
                         processedImage = processedImageBytes?.let { decodeBitmap(it) },
                         detectedFaces = detectedFaces,
                         removeBackground = removeBackground,
                         onRemoveBackgroundChanged = { removeBackground = it },
                         isProcessing = isProcessing,
                         onProcess = {
-                            if (capturedImageBytes != null) {
+                            if (capturedImageBytes != null && originalBitmap != null) {
                                 isProcessing = true
                                 Log.d("EdgePassApp", "Starting image processing with ${capturedImageBytes!!.size} bytes")
-                                
+
+                                val croppedBytes = if (detectedFaces.isNotEmpty()) {
+                                    val face = detectedFaces.first()
+                                    cropToExpandedBox(originalBitmap!!, face.expandedBox)
+                                } else {
+                                    capturedImageBytes!!
+                                }
+
                                 val faceCenterX = if (detectedFaces.isNotEmpty()) {
                                     val face = detectedFaces.first()
-                                    (face.boundingBox.left + face.boundingBox.width() / 2)
+                                    face.expandedBox.centerX()
                                 } else null
-                                
+
                                 val faceCenterY = if (detectedFaces.isNotEmpty()) {
                                     val face = detectedFaces.first()
-                                    (face.boundingBox.top + face.boundingBox.height() / 2)
+                                    face.expandedBox.centerY()
                                 } else null
-                                
-                                Log.d("EdgePassApp", "Face center: $faceCenterX, $faceCenterY")
-                                
+
+                                Log.d("EdgePassApp", "Expanded box center: $faceCenterX, $faceCenterY")
+
                                 val result = processor.generate(
-                                    capturedImageBytes!!,
+                                    croppedBytes,
                                     selectedStandard,
                                     null,
                                     faceCenterX,
@@ -123,7 +142,9 @@ fun EdgePassApp() {
                         },
                         onRetake = {
                             capturedImageBytes = null
+                            originalBitmap = null
                             processedImageBytes = null
+                            detectedFaces = emptyList()
                             currentScreen = "camera"
                         },
                         onSave = {
@@ -141,6 +162,29 @@ fun EdgePassApp() {
             }
         }
     }
+}
+
+private fun cropToExpandedBox(bitmap: Bitmap, expandedBox: RectF): ByteArray {
+    val left = expandedBox.left.toInt().coerceAtLeast(0)
+    val top = expandedBox.top.toInt().coerceAtLeast(0)
+    val right = expandedBox.right.toInt().coerceAtMost(bitmap.width)
+    val bottom = expandedBox.bottom.toInt().coerceAtMost(bitmap.height)
+
+    val width = right - left
+    val height = bottom - top
+
+    if (width <= 0 || height <= 0) {
+        val stream = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
+        return stream.toByteArray()
+    }
+
+    val cropped = Bitmap.createBitmap(bitmap, left, top, width, height)
+    val stream = ByteArrayOutputStream()
+    cropped.compress(Bitmap.CompressFormat.JPEG, 95, stream)
+    cropped.recycle()
+
+    return stream.toByteArray()
 }
 
 @Composable
@@ -162,7 +206,7 @@ private fun PreviewScreen(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text("Preview", style = MaterialTheme.typography.headlineMedium)
-        
+
         if (detectedFaces.isNotEmpty()) {
             Text(
                 "✓ ${detectedFaces.size} face(s) detected",
@@ -209,7 +253,7 @@ private fun PreviewScreen(
                         )
 
                         detectedFaces.forEach { face ->
-                            androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                            Canvas(modifier = Modifier.fillMaxSize()) {
                                 val canvasWidth = size.width
                                 val canvasHeight = size.height
                                 val scaleX = canvasWidth / img.width.toFloat()
@@ -219,10 +263,12 @@ private fun PreviewScreen(
                                 val drawnHeight = img.height * scale
                                 val offsetX = (canvasWidth - drawnWidth) / 2
                                 val offsetY = (canvasHeight - drawnHeight) / 2
-                                val boxLeft = offsetX + face.boundingBox.left * scale
-                                val boxTop = offsetY + face.boundingBox.top * scale
-                                val boxRight = offsetX + face.boundingBox.right * scale
-                                val boxBottom = offsetY + face.boundingBox.bottom * scale
+
+                                val boxLeft = offsetX + face.expandedBox.left * scale
+                                val boxTop = offsetY + face.expandedBox.top * scale
+                                val boxRight = offsetX + face.expandedBox.right * scale
+                                val boxBottom = offsetY + face.expandedBox.bottom * scale
+
                                 drawRect(
                                     color = Color.Green,
                                     topLeft = Offset(boxLeft, boxTop),

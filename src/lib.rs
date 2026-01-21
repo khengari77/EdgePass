@@ -1,5 +1,4 @@
-#[macro_use]
-extern crate log;
+use log;
 
 pub mod engine;
 pub mod jni;

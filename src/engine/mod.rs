@@ -8,7 +8,6 @@ use crate::standards::PassportStandard;
 pub struct CropConfig {
     pub target_width: u32,
     pub target_height: u32,
-    pub top_margin_ratio: f32,
 }
 
 pub struct PassportEngine;
@@ -24,26 +23,24 @@ impl PassportEngine {
         image_bytes: &[u8],
         standard: PassportStandard,
         _suit_bytes: Option<&[u8]>,
-        face_center: Option<(f32, f32)>,
+        _face_center: Option<(f32, f32)>,
         remove_background: bool,
     ) -> Result<Vec<u8>, String> {
         info!("Processing image with standard: {:?}", standard);
         info!("Remove background: {}", remove_background);
-        info!("Face center: {:?}", face_center);
 
-        let mut img = image::load_from_memory(image_bytes)
+        let img = image::load_from_memory(image_bytes)
             .map_err(|e| format!("Failed to decode image: {}", e))?;
 
         info!("Input image dimensions: {}x{}", img.width(), img.height());
 
         let config = standard.to_config();
         info!(
-            "Crop config: {}x{}, top_margin: {}",
-            config.target_width, config.target_height, config.top_margin_ratio
+            "Target dimensions: {}x{}",
+            config.target_width, config.target_height
         );
 
-        let processed =
-            self.apply_crop_and_white_bg(&mut img, config, face_center, remove_background)?;
+        let processed = self.apply_white_bg_and_resize(&img, config, remove_background)?;
 
         info!(
             "Processing complete, output dimensions: {}x{}",
@@ -60,63 +57,41 @@ impl PassportEngine {
         Ok(output_bytes)
     }
 
-    fn apply_crop_and_white_bg(
+    fn apply_white_bg_and_resize(
         &self,
-        img: &mut DynamicImage,
+        img: &DynamicImage,
         config: CropConfig,
-        face_center: Option<(f32, f32)>,
         remove_background: bool,
     ) -> Result<RgbaImage, String> {
-        let (img_width, img_height) = (img.width(), img.height());
-
-        let face_x = face_center
-            .map(|(x, _)| x)
-            .unwrap_or(img_width as f32 / 2.0);
-        let face_y = face_center
-            .map(|(_, y)| y)
-            .unwrap_or(img_height as f32 / 2.0);
-
-        let standard_height = config.target_height;
-        let standard_width = config.target_width;
-
-        let crop_width = standard_width;
-        let crop_height = standard_height;
-
-        let face_region_height = crop_height as f32 * config.top_margin_ratio;
-
-        let mut x_offset = (face_x - crop_width as f32 / 2.0) as i64;
-        let mut y_offset = (face_y - face_region_height / 2.0) as i64;
-
-        x_offset = x_offset.clamp(0, img_width as i64 - crop_width as i64);
-        y_offset = y_offset.clamp(0, img_height as i64 - crop_height as i64);
-
-        let x_offset = x_offset as u32;
-        let y_offset = y_offset as u32;
+        let (input_width, input_height) = (img.width(), img.height());
+        let target_width = config.target_width;
+        let target_height = config.target_height;
 
         info!(
-            "Cropping at offset ({}, {}) for {}x{}",
-            x_offset, y_offset, crop_width, crop_height
+            "Resizing from {}x{} to {}x{}",
+            input_width, input_height, target_width, target_height
         );
 
-        let cropped = img.crop(x_offset, y_offset, crop_width, crop_height);
-
-        info!("remove_background = {}", remove_background);
+        let resized = img.resize_exact(
+            target_width,
+            target_height,
+            image::imageops::FilterType::Lanczos3,
+        );
 
         let alpha_mask = if remove_background {
             info!("Creating alpha mask for background removal");
-            Some(self.create_alpha_mask(&cropped))
+            Some(self.create_alpha_mask(&resized))
         } else {
-            info!("No background removal, using all foreground pixels");
             None
         };
 
         let mut output: RgbaImage =
-            ImageBuffer::from_pixel(crop_width, crop_height, Rgba([255, 255, 255, 255]));
+            ImageBuffer::from_pixel(target_width, target_height, Rgba([255, 255, 255, 255]));
 
         info!("Compositing image...");
-        for y in 0..crop_height {
-            for x in 0..crop_width {
-                let pixel = cropped.get_pixel(x, y);
+        for y in 0..target_height {
+            for x in 0..target_width {
+                let pixel = resized.get_pixel(x, y);
 
                 let is_foreground = match &alpha_mask {
                     Some(mask) => mask.get_pixel(x, y)[0] > 128,
