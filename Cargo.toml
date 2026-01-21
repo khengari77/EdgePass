@@ -8,7 +8,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 log = "0.4"
-android-log = "0.13"
+android_log = "0.1"
 image = "0.24"
 jni = "0.20"
 

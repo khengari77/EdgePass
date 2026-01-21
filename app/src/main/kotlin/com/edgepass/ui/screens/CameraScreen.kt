@@ -6,7 +6,6 @@ import android.util.Log
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,16 +29,48 @@ fun CameraScreen(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    var lensFacing by remember { mutableIntStateOf(CameraSelector.LENS_FACING_BACK) }
+    var lensFacing by remember { mutableIntStateOf(CameraSelector.LENS_FACING_FRONT) }
     var selectedStandard by remember { mutableIntStateOf(PassportProcessor.STANDARD_SAUDI_EVISA) }
     var selectedSuit by remember { mutableIntStateOf(0) }
     
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
     var imageCapture: ImageCapture? by remember { mutableStateOf(null) }
+    var previewView by remember { mutableStateOf<PreviewView?>(null) }
 
     DisposableEffect(Unit) {
         onDispose {
             cameraExecutor.shutdown()
+        }
+    }
+
+    // Rebind camera when lensFacing changes
+    LaunchedEffect(lensFacing, previewView) {
+        previewView?.let { pv ->
+            val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+            cameraProviderFuture.addListener({
+                val cameraProvider = cameraProviderFuture.get()
+                val preview = Preview.Builder().build().also {
+                    it.setSurfaceProvider(pv.surfaceProvider)
+                }
+                imageCapture = ImageCapture.Builder()
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                    .build()
+                val cameraSelector = CameraSelector.Builder()
+                    .requireLensFacing(lensFacing)
+                    .build()
+                try {
+                    cameraProvider.unbindAll()
+                    cameraProvider.bindToLifecycle(
+                        lifecycleOwner,
+                        cameraSelector,
+                        preview,
+                        imageCapture
+                    )
+                    Log.d("CameraScreen", "Camera rebound with lensFacing: $lensFacing")
+                } catch (e: Exception) {
+                    Log.e("CameraScreen", "Camera binding failed", e)
+                }
+            }, ContextCompat.getMainExecutor(context))
         }
     }
 
@@ -65,8 +96,11 @@ fun CameraScreen(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.End
         ) {
-            TextButton(onClick = { lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK }) {
-                Text(if (lensFacing == CameraSelector.LENS_FACING_BACK) "BACK" else "FRONT")
+            TextButton(onClick = { 
+                lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK 
+                Log.d("CameraScreen", "Toggle clicked, lensFacing now: $lensFacing")
+            }) {
+                Text(if (lensFacing == CameraSelector.LENS_FACING_BACK) "FRONT" else "BACK")
             }
         }
 
@@ -83,35 +117,10 @@ fun CameraScreen(
                     PreviewView(ctx).apply {
                         scaleType = PreviewView.ScaleType.FILL_CENTER
                         implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-                    }
+                    }.also { previewView = it }
                 },
                 modifier = Modifier.fillMaxSize(),
-                update = { previewView ->
-                    val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
-                    cameraProviderFuture.addListener({
-                        val cameraProvider = cameraProviderFuture.get()
-                        val preview = Preview.Builder().build().also {
-                            it.surfaceProvider = previewView.surfaceProvider
-                        }
-                        imageCapture = ImageCapture.Builder()
-                            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                            .build()
-                        val cameraSelector = CameraSelector.Builder()
-                            .requireLensFacing(lensFacing)
-                            .build()
-                        try {
-                            cameraProvider.unbindAll()
-                            cameraProvider.bindToLifecycle(
-                                lifecycleOwner,
-                                cameraSelector,
-                                preview,
-                                imageCapture
-                            )
-                        } catch (e: Exception) {
-                            Log.e("CameraScreen", "Camera binding failed", e)
-                        }
-                    }, ContextCompat.getMainExecutor(context))
-                }
+                update = { }
             )
         }
 
@@ -137,17 +146,41 @@ fun CameraScreen(
                         object : ImageCapture.OnImageCapturedCallback() {
                             override fun onCaptureSuccess(image: ImageProxy) {
                                 val bitmap = image.toBitmap()
-                                val rotatedBitmap = if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
-                                    val matrix = Matrix()
-                                    matrix.postScale(-1f, 1f, bitmap.width / 2f, bitmap.height / 2f)
-                                    Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-                                } else {
-                                    bitmap
+                                val rotationDegrees = image.imageInfo.rotationDegrees
+                                
+                                Log.d("CameraScreen", "Original image - rotation: $rotationDegrees, format: ${image.format}")
+                                
+                                val correctedBitmap = when {
+                                    lensFacing == CameraSelector.LENS_FACING_FRONT && rotationDegrees == 270 -> {
+                                        // Front camera needs mirroring and rotation correction
+                                        val matrix = Matrix()
+                                        matrix.postScale(-1f, 1f, bitmap.width / 2f, bitmap.height / 2f)
+                                        matrix.postRotate(90f)
+                                        Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+                                    }
+                                    lensFacing == CameraSelector.LENS_FACING_FRONT -> {
+                                        // Front camera - mirror only
+                                        val matrix = Matrix()
+                                        matrix.postScale(-1f, 1f, bitmap.width / 2f, bitmap.height / 2f)
+                                        Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+                                    }
+                                    rotationDegrees > 0 -> {
+                                        // Back camera with rotation - rotate back to normal
+                                        val matrix = Matrix()
+                                        matrix.postRotate(-rotationDegrees.toFloat())
+                                        Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+                                    }
+                                    else -> bitmap
                                 }
+                                
                                 val stream = java.io.ByteArrayOutputStream()
-                                rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
+                                correctedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
                                 val bytes = stream.toByteArray()
-                                if (rotatedBitmap != bitmap) rotatedBitmap.recycle()
+                                
+                                if (correctedBitmap != bitmap) {
+                                    correctedBitmap.recycle()
+                                }
+                                bitmap.recycle()
                                 image.close()
                                 onImageCaptured(bytes)
                             }

@@ -1,5 +1,8 @@
-use image::{DynamicImage, ImageBuffer, ImageOutputFormat, Rgb, Rgba, RgbaImage};
+use image::{DynamicImage, GenericImageView, ImageBuffer, ImageOutputFormat, Rgba, RgbaImage};
 use log::info;
+use std::io::Cursor;
+
+use crate::standards::PassportStandard;
 
 #[derive(Clone, Copy, Debug)]
 pub struct CropConfig {
@@ -28,7 +31,7 @@ impl PassportEngine {
         info!("Remove background: {}", remove_background);
         info!("Face center: {:?}", face_center);
 
-        let img = image::load_from_memory(image_bytes)
+        let mut img = image::load_from_memory(image_bytes)
             .map_err(|e| format!("Failed to decode image: {}", e))?;
 
         info!("Input image dimensions: {}x{}", img.width(), img.height());
@@ -40,7 +43,7 @@ impl PassportEngine {
         );
 
         let processed =
-            self.apply_crop_and_white_bg(&img, config, face_center, remove_background)?;
+            self.apply_crop_and_white_bg(&mut img, config, face_center, remove_background)?;
 
         info!(
             "Processing complete, output dimensions: {}x{}",
@@ -49,8 +52,9 @@ impl PassportEngine {
         );
 
         let mut output_bytes = Vec::new();
+        let mut cursor = Cursor::new(&mut output_bytes);
         processed
-            .write_to(&mut output_bytes, ImageOutputFormat::Jpeg(95))
+            .write_to(&mut cursor, ImageOutputFormat::Jpeg(95))
             .map_err(|e| format!("Failed to encode output: {}", e))?;
 
         Ok(output_bytes)
@@ -58,7 +62,7 @@ impl PassportEngine {
 
     fn apply_crop_and_white_bg(
         &self,
-        img: &DynamicImage,
+        img: &mut DynamicImage,
         config: CropConfig,
         face_center: Option<(f32, f32)>,
         remove_background: bool,
@@ -78,13 +82,13 @@ impl PassportEngine {
         let crop_width = standard_width;
         let crop_height = standard_height;
 
-        let face_region_height = crop_height * config.top_margin_ratio;
+        let face_region_height = crop_height as f32 * config.top_margin_ratio;
 
         let mut x_offset = (face_x - crop_width as f32 / 2.0) as i64;
         let mut y_offset = (face_y - face_region_height / 2.0) as i64;
 
-        x_offset = x_offset.clamp(0, (img_width as i64 - crop_width as i64));
-        y_offset = y_offset.clamp(0, (img_height as i64 - crop_height as i64));
+        x_offset = x_offset.clamp(0, img_width as i64 - crop_width as i64);
+        y_offset = y_offset.clamp(0, img_height as i64 - crop_height as i64);
 
         let x_offset = x_offset as u32;
         let y_offset = y_offset as u32;
@@ -125,7 +129,7 @@ impl PassportEngine {
             }
         }
 
-        Ok(DynamicImage::ImageRgba8(output))
+        Ok(output)
     }
 
     fn create_alpha_mask(

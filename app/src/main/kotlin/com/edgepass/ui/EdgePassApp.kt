@@ -2,7 +2,6 @@ package com.edgepass.ui
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Rect
 import android.graphics.RectF
 import android.content.ContentValues
 import android.os.Build
@@ -26,12 +25,12 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.edgepass.lib.FaceDetector
+import com.edgepass.lib.MlKitFaceDetector
 import com.edgepass.lib.PassportProcessor
 import com.edgepass.ui.screens.CameraScreen
 
 data class DetectedFace(
-    val boundingBox: Rect,
+    val boundingBox: RectF,
     val confidence: Float
 )
 
@@ -40,7 +39,7 @@ data class DetectedFace(
 fun EdgePassApp() {
     val context = LocalContext.current
     val processor = remember { PassportProcessor.getInstance(context) }
-    val faceDetector = remember { FaceDetector(context) }
+    val faceDetector = remember { MlKitFaceDetector(context) }
 
     var currentScreen by remember { mutableStateOf("camera") }
     var capturedImageBytes by remember { mutableStateOf<ByteArray?>(null) }
@@ -52,9 +51,10 @@ fun EdgePassApp() {
 
     LaunchedEffect(capturedImageBytes) {
         capturedImageBytes?.let { bytes ->
-            val faces = faceDetector.detectFromBytes(bytes)
-            detectedFaces = faces.map { DetectedFace(it.boundingBox, it.confidence) }
-            Log.d("EdgePassApp", "Detected ${faces.size} faces")
+            faceDetector.detectFromBytes(bytes) { faces ->
+                detectedFaces = faces.map { DetectedFace(it.boundingBox, it.confidence) }
+                Log.d("EdgePassApp", "Detected ${faces.size} faces")
+            }
         }
     }
 
@@ -98,12 +98,12 @@ fun EdgePassApp() {
                                 
                                 val faceCenterX = if (detectedFaces.isNotEmpty()) {
                                     val face = detectedFaces.first()
-                                    (face.boundingBox.left + face.boundingBox.width() / 2).toFloat()
+                                    (face.boundingBox.left + face.boundingBox.width() / 2)
                                 } else null
                                 
                                 val faceCenterY = if (detectedFaces.isNotEmpty()) {
                                     val face = detectedFaces.first()
-                                    (face.boundingBox.top + face.boundingBox.height() / 2).toFloat()
+                                    (face.boundingBox.top + face.boundingBox.height() / 2)
                                 } else null
                                 
                                 Log.d("EdgePassApp", "Face center: $faceCenterX, $faceCenterY")

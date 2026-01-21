@@ -1,6 +1,6 @@
 use crate::engine::PassportEngine;
 use crate::standards::PassportStandard;
-use jni::objects::{JByteArray, JClass, JString};
+use jni::objects::{JClass, JString};
 use jni::sys::{jbyteArray, jfloat, jint, jstring};
 use jni::JNIEnv;
 use std::panic;
@@ -21,7 +21,7 @@ pub extern "system" fn Java_com_edgepass_lib_PassportProcessor_nativeInitEngine(
 
     let model_path_str: String = unsafe {
         let j_string = JString::from_raw(model_path);
-        env.get_string(&j_string).unwrap().into()
+        env.get_string(j_string).unwrap().into()
     };
 
     log::info!(
@@ -40,9 +40,9 @@ pub extern "system" fn Java_com_edgepass_lib_PassportProcessor_nativeInitEngine(
 pub extern "system" fn Java_com_edgepass_lib_PassportProcessor_nativeGenerate(
     env: JNIEnv,
     _class: JClass,
-    image_bytes: JByteArray,
+    image_bytes: jbyteArray,
     standard_id: jint,
-    suit_bytes: JByteArray,
+    suit_bytes: jbyteArray,
     face_center_x: jfloat,
     face_center_y: jfloat,
     remove_background: jint,
@@ -118,9 +118,9 @@ pub extern "system" fn Java_com_edgepass_lib_PassportProcessor_nativeGenerate(
             let jni_bytes: &[i8] = unsafe {
                 std::slice::from_raw_parts(output_bytes.as_ptr() as *const i8, output_bytes.len())
             };
-            env.set_byte_array_region(&output_array, 0, jni_bytes)
+            env.set_byte_array_region(output_array, 0, jni_bytes)
                 .unwrap();
-            output_array.into_raw()
+            output_array
         }
         Ok(Err(e)) => {
             log::error!("Processing failed: {:?}", e);

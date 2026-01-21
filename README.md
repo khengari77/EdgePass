@@ -285,7 +285,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 **EdgePass Development Team**
 
 - GitHub: [@khengari77](https://github.com/khengari77)
-- Email: dev@edgepass.app
 
 ---
 

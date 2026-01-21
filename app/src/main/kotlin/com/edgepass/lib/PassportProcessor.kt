@@ -3,12 +3,11 @@ package com.edgepass.lib
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Canvas
-import android.graphics.Color
 import android.util.Log
 import java.io.File
-import java.io.FileOutputStream
-import java.nio.FloatBuffer
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 class PassportProcessor(private val context: Context) {
 
@@ -36,7 +35,7 @@ class PassportProcessor(private val context: Context) {
         }
     }
 
-    private val backgroundRemover: BackgroundRemover? = null
+    private var faceDetector: MlKitFaceDetector? = null
 
     val version: String by lazy {
         nativeVersion()
@@ -49,6 +48,7 @@ class PassportProcessor(private val context: Context) {
         setupModels(context)
         val modelPath = context.filesDir.absolutePath
         nativeInitEngine(modelPath)
+        faceDetector = MlKitFaceDetector(context)
         Log.d(TAG, "Initialized with model path: $modelPath")
     }
 
@@ -85,16 +85,60 @@ class PassportProcessor(private val context: Context) {
         faceCenterY: Float? = null,
         removeBackground: Boolean = false
     ): ByteArray? {
+        val detectedFaceCenterX: Float?
+        val detectedFaceCenterY: Float?
+
+        if (faceCenterX == null || faceCenterY == null) {
+            val faceCoords = detectFaceCenter(imageBytes)
+            detectedFaceCenterX = faceCenterX ?: faceCoords?.first ?: -1.0f
+            detectedFaceCenterY = faceCenterY ?: faceCoords?.second ?: -1.0f
+        } else {
+            detectedFaceCenterX = faceCenterX
+            detectedFaceCenterY = faceCenterY
+        }
+
+        Log.d(TAG, "Using face center: ($detectedFaceCenterX, $detectedFaceCenterY)")
+
         if (removeBackground) {
             return try {
                 Log.d(TAG, "Using ONNX Runtime for background removal")
                 generateWithOnnx(imageBytes, standard, removeBackground)
             } catch (e: Exception) {
                 Log.e(TAG, "ONNX background removal failed, falling back to Rust: ${e.message}")
-                nativeGenerate(imageBytes, standard, suitBytes, faceCenterX, faceCenterY, removeBackground)
+                nativeGenerate(imageBytes, standard, suitBytes, detectedFaceCenterX, detectedFaceCenterY, removeBackground)
             }
         }
-        return nativeGenerate(imageBytes, standard, suitBytes, faceCenterX, faceCenterY, removeBackground)
+        return nativeGenerate(imageBytes, standard, suitBytes, detectedFaceCenterX, detectedFaceCenterY, removeBackground)
+    }
+
+    private fun detectFaceCenter(imageBytes: ByteArray): Pair<Float, Float>? {
+        val detector = faceDetector ?: return null
+
+        val result = AtomicReference<List<MlKitFaceDetector.FaceInfo>?>()
+        val latch = CountDownLatch(1)
+
+        try {
+            detector.detectFromBytes(imageBytes) { faces ->
+                result.set(faces)
+                latch.countDown()
+            }
+
+            latch.await(10, TimeUnit.SECONDS)
+
+            val faces = result.get()
+            if (!faces.isNullOrEmpty()) {
+                val face = faces.first()
+                val centerX = (face.boundingBox.left + face.boundingBox.right) / 2f
+                val centerY = (face.boundingBox.top + face.boundingBox.bottom) / 2f
+                Log.d(TAG, "Detected face at center: ($centerX, $centerY)")
+                return Pair(centerX, centerY)
+            }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Face detection failed: ${e.message}")
+        }
+
+        return null
     }
 
     private fun generateWithOnnx(imageBytes: ByteArray, standard: Int, removeBackground: Boolean): ByteArray? {
@@ -129,8 +173,8 @@ class PassportProcessor(private val context: Context) {
         imageBytes: ByteArray,
         standard: Int,
         suitBytes: ByteArray?,
-        faceCenterX: Float?,
-        faceCenterY: Float?,
+        faceCenterX: Float,
+        faceCenterY: Float,
         removeBackground: Boolean
     ): ByteArray?
 

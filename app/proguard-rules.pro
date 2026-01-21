@@ -17,3 +17,7 @@
 # Keep Kotlin metadata
 -keepattributes RuntimeVisibleAnnotations
 -keep class kotlin.Metadata { *; }
+
+# ML Kit face detection
+-keep class com.google.mlkit.** { *; }
+-dontwarn com.google.mlkit.**
