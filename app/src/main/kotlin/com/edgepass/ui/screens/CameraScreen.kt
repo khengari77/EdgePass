@@ -1,8 +1,8 @@
 package com.edgepass.ui.screens
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Matrix
-import android.graphics.RectF
 import android.util.Log
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -18,24 +18,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.drawText
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.edgepass.lib.MlKitFaceDetector
 import com.edgepass.lib.PassportProcessor
+import java.nio.ByteBuffer
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
 
 @Composable
 fun CameraScreen(
@@ -44,38 +37,25 @@ fun CameraScreen(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+
     var lensFacing by remember { mutableIntStateOf(CameraSelector.LENS_FACING_FRONT) }
     var selectedStandard by remember { mutableIntStateOf(PassportProcessor.STANDARD_SAUDI_EVISA) }
     var selectedSuit by remember { mutableIntStateOf(0) }
 
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
-    val detectionExecutor = remember { Executors.newSingleThreadExecutor() }
     var imageCapture: ImageCapture? by remember { mutableStateOf(null) }
     var previewView by remember { mutableStateOf<PreviewView?>(null) }
 
     val faceDetector = remember { MlKitFaceDetector(context) }
     var detectionResult by remember { mutableStateOf<MlKitFaceDetector.DetectionResult?>(null) }
-    var isDetecting by remember { mutableStateOf(false) }
-    var capturedBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var detectionTrigger by remember { mutableIntStateOf(0) }
+
+    var imageWidth by remember { mutableIntStateOf(1) }
+    var imageHeight by remember { mutableIntStateOf(1) }
 
     DisposableEffect(Unit) {
         onDispose {
             cameraExecutor.shutdown()
-            detectionExecutor.shutdown()
             faceDetector.release()
-        }
-    }
-
-    LaunchedEffect(detectionTrigger) {
-        capturedBitmap?.let { bitmap ->
-            if (!isDetecting) {
-                isDetecting = true
-                faceDetector.detectRealtime(bitmap) { result ->
-                    detectionResult = result
-                    isDetecting = false
-                }
-            }
         }
     }
 
@@ -84,24 +64,60 @@ fun CameraScreen(
             val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
             cameraProviderFuture.addListener({
                 val cameraProvider = cameraProviderFuture.get()
+
                 val preview = Preview.Builder().build().also {
                     it.setSurfaceProvider(pv.surfaceProvider)
                 }
-                imageCapture = ImageCapture.Builder()
-                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+
+                val imageAnalysis = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                     .build()
+
+                imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                    val rotation = imageProxy.imageInfo.rotationDegrees
+                    if (rotation == 90 || rotation == 270) {
+                        imageWidth = imageProxy.height
+                        imageHeight = imageProxy.width
+                    } else {
+                        imageWidth = imageProxy.width
+                        imageHeight = imageProxy.height
+                    }
+
+                    val mediaImage = imageProxy.image
+                    if (mediaImage != null) {
+                        val inputImage = com.google.mlkit.vision.common.InputImage.fromMediaImage(
+                            mediaImage,
+                            imageProxy.imageInfo.rotationDegrees
+                        )
+
+                        faceDetector.detectFromInputImage(inputImage) { faces ->
+                            val status = evaluateFacePosition(faces, imageWidth, imageHeight)
+                            detectionResult = MlKitFaceDetector.DetectionResult(faces, status, false)
+                            imageProxy.close()
+                        }
+                    } else {
+                        imageProxy.close()
+                    }
+                }
+
+                imageCapture = ImageCapture.Builder()
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                    .build()
+
                 val cameraSelector = CameraSelector.Builder()
                     .requireLensFacing(lensFacing)
                     .build()
+
                 try {
                     cameraProvider.unbindAll()
                     cameraProvider.bindToLifecycle(
                         lifecycleOwner,
                         cameraSelector,
                         preview,
+                        imageAnalysis,
                         imageCapture
                     )
-                    Log.d("CameraScreen", "Camera rebound with lensFacing: $lensFacing")
                 } catch (e: Exception) {
                     Log.e("CameraScreen", "Camera binding failed", e)
                 }
@@ -121,8 +137,7 @@ fun CameraScreen(
         ) {
             StandardButton("Saudi", selectedStandard == PassportProcessor.STANDARD_SAUDI_EVISA) { selectedStandard = PassportProcessor.STANDARD_SAUDI_EVISA }
             StandardButton("US", selectedStandard == PassportProcessor.STANDARD_US) { selectedStandard = PassportProcessor.STANDARD_US }
-            StandardButton("Schengen", selectedStandard == PassportProcessor.STANDARD_SCHENGEN) { selectedStandard = PassportProcessor.STANDARD_SCHENGEN }
-            StandardButton("ID", selectedStandard == PassportProcessor.STANDARD_GENERAL_ID) { selectedStandard = PassportProcessor.STANDARD_GENERAL_ID }
+            StandardButton("Schengen", selectedStandard == PassportProcessor.STANDARD_SCHENGEN) { selectedStandard = PassportProcessor.STANDARD_GENERAL_ID }
         }
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -133,7 +148,6 @@ fun CameraScreen(
         ) {
             TextButton(onClick = {
                 lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
-                Log.d("CameraScreen", "Toggle clicked, lensFacing now: $lensFacing")
             }) {
                 Text(if (lensFacing == CameraSelector.LENS_FACING_BACK) "FRONT" else "BACK")
             }
@@ -150,12 +164,11 @@ fun CameraScreen(
             AndroidView(
                 factory = { ctx ->
                     PreviewView(ctx).apply {
-                        scaleType = PreviewView.ScaleType.FILL_CENTER
+                        scaleType = PreviewView.ScaleType.FIT_CENTER
                         implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                     }.also { previewView = it }
                 },
-                modifier = Modifier.fillMaxSize(),
-                update = { }
+                modifier = Modifier.fillMaxSize()
             )
 
             detectionResult?.let { result ->
@@ -163,38 +176,23 @@ fun CameraScreen(
                     val face = result.faces.first()
 
                     Canvas(modifier = Modifier.fillMaxSize()) {
-                        val canvasWidth = size.width
-                        val canvasHeight = size.height
+                        val scaleX = size.width / imageWidth
+                        val scaleY = size.height / imageHeight
+                        val scale = minOf(scaleX, scaleY)
 
-                        val scaleX = canvasWidth / face.expandedBox.width()
-                        val scaleY = canvasHeight / face.expandedBox.height()
+                        val offsetX = (size.width - (imageWidth * scale)) / 2f
+                        val offsetY = (size.height - (imageHeight * scale)) / 2f
 
-                        val expandedLeft = face.expandedBox.left * scaleX
-                        val expandedTop = face.expandedBox.top * scaleY
-                        val expandedRight = face.expandedBox.right * scaleX
-                        val expandedBottom = face.expandedBox.bottom * scaleY
-                        val expandedWidth = expandedRight - expandedLeft
-                        val expandedHeight = expandedBottom - expandedTop
-
-                        val ovalWidth = expandedWidth * 0.8f
-                        val ovalHeight = expandedHeight * 1.2f
-                        val ovalLeft = (canvasWidth - ovalWidth) / 2
-                        val ovalTop = (canvasHeight - ovalHeight) / 2
+                        val left = offsetX + face.expandedBox.left * scale
+                        val top = offsetY + face.expandedBox.top * scale
+                        val width = face.expandedBox.width() * scale
+                        val height = face.expandedBox.height() * scale
 
                         drawOval(
-                            color = Color.White.copy(alpha = 0.3f),
-                            topLeft = Offset(ovalLeft, ovalTop),
-                            size = Size(ovalWidth, ovalHeight),
-                            style = Stroke(width = 4f)
-                        )
-
-                        val faceCenterX = face.boundingBox.centerX() * scaleX
-                        val faceCenterY = face.boundingBox.centerY() * scaleY
-
-                        drawCircle(
-                            color = Color.Yellow,
-                            radius = 8f,
-                            center = Offset(faceCenterX, faceCenterY)
+                            color = Color.Green,
+                            topLeft = Offset(left, top),
+                            size = Size(width, height),
+                            style = Stroke(width = 5f)
                         )
                     }
                 }
@@ -202,7 +200,7 @@ fun CameraScreen(
 
             detectionResult?.let { result ->
                 val statusText = when (result.status) {
-                    MlKitFaceDetector.FacePositionStatus.GOOD -> "✓ Good position"
+                    MlKitFaceDetector.FacePositionStatus.GOOD -> "Good position"
                     MlKitFaceDetector.FacePositionStatus.TOO_FAR -> "Move closer"
                     MlKitFaceDetector.FacePositionStatus.TOO_CLOSE -> "Move back"
                     MlKitFaceDetector.FacePositionStatus.NOT_CENTERED -> "Center your face"
@@ -249,56 +247,56 @@ fun CameraScreen(
 
         Button(
             onClick = {
-                imageCapture?.let { capture ->
-                    capture.takePicture(
-                        cameraExecutor,
-                        object : ImageCapture.OnImageCapturedCallback() {
-                            override fun onCaptureSuccess(image: ImageProxy) {
-                                var bitmap = image.toBitmap()
-                                val rotationDegrees = image.imageInfo.rotationDegrees
+                val capture = imageCapture ?: return@Button
+                capture.takePicture(
+                    cameraExecutor,
+                    object : ImageCapture.OnImageCapturedCallback() {
+                        override fun onCaptureSuccess(image: ImageProxy) {
+                            // Use CameraX's built-in toBitmap method which handles all formats correctly
+                            val bitmap = image.toBitmap()
+                            val rotationDegrees = image.imageInfo.rotationDegrees
 
-                                Log.d("CameraScreen", "Original image - rotation: $rotationDegrees, format: ${image.format}")
-
-                                val correctedBitmap = when {
-                                    lensFacing == CameraSelector.LENS_FACING_FRONT && rotationDegrees == 270 -> {
-                                        val matrix = Matrix()
-                                        matrix.postScale(-1f, 1f, bitmap.width / 2f, bitmap.height / 2f)
-                                        matrix.postRotate(90f)
-                                        Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-                                    }
-                                    lensFacing == CameraSelector.LENS_FACING_FRONT -> {
-                                        val matrix = Matrix()
-                                        matrix.postScale(-1f, 1f, bitmap.width / 2f, bitmap.height / 2f)
-                                        Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-                                    }
-                                    rotationDegrees > 0 -> {
-                                        val matrix = Matrix()
-                                        matrix.postRotate(-rotationDegrees.toFloat())
-                                        Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-                                    }
-                                    else -> bitmap
-                                }
-
-                                capturedBitmap = correctedBitmap
-                                detectionTrigger++
-
-                                val stream = java.io.ByteArrayOutputStream()
-                                correctedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
-                                val bytes = stream.toByteArray()
-
-                                if (correctedBitmap != bitmap) {
-                                    bitmap.recycle()
-                                }
-                                bitmap.recycle()
-                                image.close()
-                                onImageCaptured(bytes)
+                            // Calculate final dimensions after rotation
+                            val finalWidth: Int
+                            val finalHeight: Int
+                            if (rotationDegrees == 90 || rotationDegrees == 270) {
+                                finalWidth = bitmap.height
+                                finalHeight = bitmap.width
+                            } else {
+                                finalWidth = bitmap.width
+                                finalHeight = bitmap.height
                             }
-                            override fun onError(exception: ImageCaptureException) {
-                                Log.e("CameraScreen", "Photo capture failed", exception)
+
+                            val matrix = Matrix()
+
+                            // Apply rotation
+                            matrix.postRotate(rotationDegrees.toFloat())
+
+                            // Handle front camera mirroring
+                            if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
+                                // Mirror around vertical axis after rotation
+                                matrix.postScale(-1f, 1f, finalWidth / 2f, finalHeight / 2f)
                             }
+
+                            val rotatedBitmap = Bitmap.createBitmap(
+                                bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true
+                            )
+
+                            val stream = java.io.ByteArrayOutputStream()
+                            rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
+
+                            image.close()
+                            bitmap.recycle()
+
+                            onImageCaptured(stream.toByteArray())
+                            if (rotatedBitmap != bitmap) rotatedBitmap.recycle()
                         }
-                    )
-                }
+
+                        override fun onError(exception: ImageCaptureException) {
+                            Log.e("CameraScreen", "Capture failed", exception)
+                        }
+                    }
+                )
             },
             modifier = Modifier
                 .fillMaxWidth()
@@ -306,6 +304,36 @@ fun CameraScreen(
         ) {
             Text("Capture")
         }
+    }
+}
+
+private fun evaluateFacePosition(faces: List<MlKitFaceDetector.FaceInfo>, imageWidth: Int, imageHeight: Int): MlKitFaceDetector.FacePositionStatus {
+    if (faces.isEmpty()) {
+        return MlKitFaceDetector.FacePositionStatus.NO_FACE
+    }
+
+    val face = faces.first()
+    val faceCenterX = face.boundingBox.centerX()
+    val faceCenterY = face.boundingBox.centerY()
+
+    val imageCenterX = imageWidth / 2f
+    val imageCenterY = imageHeight / 2f
+
+    val horizontalOffset = kotlin.math.abs(faceCenterX - imageCenterX) / imageWidth
+    val verticalOffset = kotlin.math.abs(faceCenterY - imageCenterY) / imageHeight
+
+    if (horizontalOffset > 0.15f || verticalOffset > 0.15f) {
+        return MlKitFaceDetector.FacePositionStatus.NOT_CENTERED
+    }
+
+    val faceArea = face.boundingBox.width() * face.boundingBox.height()
+    val imageArea = imageWidth * imageHeight
+    val faceRatio = faceArea / imageArea
+
+    return when {
+        faceRatio < 0.08f -> MlKitFaceDetector.FacePositionStatus.TOO_FAR
+        faceRatio > 0.35f -> MlKitFaceDetector.FacePositionStatus.TOO_CLOSE
+        else -> MlKitFaceDetector.FacePositionStatus.GOOD
     }
 }
 
@@ -333,12 +361,4 @@ private fun SuitButton(text: String, selected: Boolean, onClick: () -> Unit) {
     ) {
         Text(text, color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant)
     }
-}
-
-private fun ImageProxy.toBitmap(): Bitmap {
-    val buffer = planes[0].buffer
-    val bytes = ByteArray(buffer.remaining())
-    buffer.get(bytes)
-    return android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-        ?: throw IllegalStateException("Failed to decode image")
 }

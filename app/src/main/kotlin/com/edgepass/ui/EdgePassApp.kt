@@ -54,10 +54,14 @@ fun EdgePassApp() {
 
     LaunchedEffect(capturedImageBytes) {
         capturedImageBytes?.let { bytes ->
+            Log.d("EdgePassApp", "Processing captured image: ${bytes.size} bytes")
             originalBitmap = decodeBitmap(bytes)
             originalBitmap?.let { bitmap ->
+                Log.d("EdgePassApp", "Bitmap dimensions: ${bitmap.width}x${bitmap.height}")
                 faceDetector.detect(bitmap) { faces ->
                     detectedFaces = faces.map {
+                        Log.d("EdgePassApp", "Face detected - boundingBox: (${it.boundingBox.left}, ${it.boundingBox.top}, ${it.boundingBox.right}, ${it.boundingBox.bottom})")
+                        Log.d("EdgePassApp", "Face detected - expandedBox: (${it.expandedBox.left}, ${it.expandedBox.top}, ${it.expandedBox.right}, ${it.expandedBox.bottom})")
                         DetectedFace(
                             boundingBox = it.boundingBox,
                             expandedBox = it.expandedBox,
@@ -66,7 +70,7 @@ fun EdgePassApp() {
                     }
                     Log.d("EdgePassApp", "Detected ${faces.size} faces")
                 }
-            }
+            } ?: Log.e("EdgePassApp", "Failed to decode bitmap from bytes")
         }
     }
 
@@ -173,13 +177,19 @@ private fun cropToExpandedBox(bitmap: Bitmap, expandedBox: RectF): ByteArray {
     val width = right - left
     val height = bottom - top
 
+    Log.d("EdgePassApp", "Cropping - Bitmap: ${bitmap.width}x${bitmap.height}")
+    Log.d("EdgePassApp", "Cropping - Box: ($left, $top, $right, $bottom) = ${width}x${height}")
+
     if (width <= 0 || height <= 0) {
+        Log.w("EdgePassApp", "Invalid crop dimensions, returning original")
         val stream = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
         return stream.toByteArray()
     }
 
     val cropped = Bitmap.createBitmap(bitmap, left, top, width, height)
+    Log.d("EdgePassApp", "Cropped bitmap: ${cropped.width}x${cropped.height}")
+
     val stream = ByteArrayOutputStream()
     cropped.compress(Bitmap.CompressFormat.JPEG, 95, stream)
     cropped.recycle()

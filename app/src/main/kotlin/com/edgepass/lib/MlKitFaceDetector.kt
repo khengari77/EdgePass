@@ -109,6 +109,27 @@ class MlKitFaceDetector(private val context: Context) {
         }
     }
 
+    fun detectFromInputImage(image: InputImage, callback: (List<FaceInfo>) -> Unit) {
+        val detector = mlKitDetector ?: run {
+            callback(emptyList())
+            return
+        }
+
+        val width = image.width
+        val height = image.height
+
+        detector.process(image)
+            .addOnSuccessListener { faces ->
+                val result = faces.map { createFaceInfo(it, width, height) }
+                Log.d(TAG, "Detected ${result.size} faces from InputImage")
+                callback(result)
+            }
+            .addOnFailureListener { e ->
+                Log.e(TAG, "InputImage detection failed: ${e.message}")
+                callback(emptyList())
+            }
+    }
+
     fun detectRealtime(bitmap: Bitmap, callback: (DetectionResult) -> Unit) {
         val detector = mlKitDetector ?: run {
             callback(DetectionResult(emptyList(), FacePositionStatus.NO_FACE, false))
@@ -164,7 +185,7 @@ class MlKitFaceDetector(private val context: Context) {
         val expandedLeft = (centerX - headWidth * EXPANSION_RATIO / 2).coerceAtLeast(0f)
         val expandedTop = (centerY - headHeight * EXPANSION_RATIO / 2).coerceAtLeast(0f)
         val expandedRight = (centerX + headWidth * EXPANSION_RATIO / 2).coerceAtMost(imageWidth.toFloat())
-        val expandedBottom = (centerY + headHeight * EXPANSION_RATIO * 0.8f).coerceAtMost(imageHeight.toFloat())
+        val expandedBottom = (centerY + headHeight * EXPANSION_RATIO / 2).coerceAtMost(imageHeight.toFloat())
 
         val confidence = if (face.trackingId != null) 1.0f else 0.8f
 
