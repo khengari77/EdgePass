@@ -2,6 +2,7 @@ package com.edgepass.ui.screens
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageFormat
 import android.graphics.Matrix
 import android.util.Log
 import androidx.camera.core.*
@@ -27,7 +28,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.edgepass.lib.MlKitFaceDetector
 import com.edgepass.lib.PassportProcessor
-import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 
 @Composable
@@ -252,44 +252,42 @@ fun CameraScreen(
                     cameraExecutor,
                     object : ImageCapture.OnImageCapturedCallback() {
                         override fun onCaptureSuccess(image: ImageProxy) {
-                            // Use CameraX's built-in toBitmap method which handles all formats correctly
-                            val bitmap = image.toBitmap()
-                            val rotationDegrees = image.imageInfo.rotationDegrees
+                            try {
+                                val bitmap = image.convertToBitmap()
+                                val rotationDegrees = image.imageInfo.rotationDegrees
 
-                            // Calculate final dimensions after rotation
-                            val finalWidth: Int
-                            val finalHeight: Int
-                            if (rotationDegrees == 90 || rotationDegrees == 270) {
-                                finalWidth = bitmap.height
-                                finalHeight = bitmap.width
-                            } else {
-                                finalWidth = bitmap.width
-                                finalHeight = bitmap.height
+                                val finalWidth: Int
+                                val finalHeight: Int
+                                if (rotationDegrees == 90 || rotationDegrees == 270) {
+                                    finalWidth = bitmap.height
+                                    finalHeight = bitmap.width
+                                } else {
+                                    finalWidth = bitmap.width
+                                    finalHeight = bitmap.height
+                                }
+
+                                val matrix = Matrix()
+                                matrix.postRotate(rotationDegrees.toFloat())
+
+                                if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
+                                    matrix.postScale(-1f, 1f, finalWidth / 2f, finalHeight / 2f)
+                                }
+
+                                val rotatedBitmap = Bitmap.createBitmap(
+                                    bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true
+                                )
+
+                                val stream = java.io.ByteArrayOutputStream()
+                                rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
+
+                                onImageCaptured(stream.toByteArray())
+                                if (rotatedBitmap != bitmap) rotatedBitmap.recycle()
+                                bitmap.recycle()
+                            } catch (e: Exception) {
+                                Log.e("CameraScreen", "Error processing capture", e)
+                            } finally {
+                                image.close()
                             }
-
-                            val matrix = Matrix()
-
-                            // Apply rotation
-                            matrix.postRotate(rotationDegrees.toFloat())
-
-                            // Handle front camera mirroring
-                            if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
-                                // Mirror around vertical axis after rotation
-                                matrix.postScale(-1f, 1f, finalWidth / 2f, finalHeight / 2f)
-                            }
-
-                            val rotatedBitmap = Bitmap.createBitmap(
-                                bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true
-                            )
-
-                            val stream = java.io.ByteArrayOutputStream()
-                            rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
-
-                            image.close()
-                            bitmap.recycle()
-
-                            onImageCaptured(stream.toByteArray())
-                            if (rotatedBitmap != bitmap) rotatedBitmap.recycle()
                         }
 
                         override fun onError(exception: ImageCaptureException) {
@@ -305,6 +303,45 @@ fun CameraScreen(
             Text("Capture")
         }
     }
+}
+
+fun ImageProxy.convertToBitmap(): Bitmap {
+    if (format == ImageFormat.JPEG) {
+        val buffer = planes[0].buffer
+        val bytes = ByteArray(buffer.remaining())
+        buffer.get(bytes)
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            ?: throw IllegalStateException("Failed to decode JPEG")
+    }
+
+    val yBuffer = planes[0].buffer
+    val uBuffer = planes[1].buffer
+    val vBuffer = planes[2].buffer
+
+    val ySize = yBuffer.remaining()
+    val uSize = uBuffer.remaining()
+    val vSize = vBuffer.remaining()
+
+    val nv21 = ByteArray(ySize + uSize + vSize)
+
+    yBuffer.get(nv21, 0, ySize)
+    vBuffer.get(nv21, ySize, vSize)
+    uBuffer.get(nv21, ySize + vSize, uSize)
+
+    val yuvImage = android.graphics.YuvImage(
+        nv21,
+        ImageFormat.NV21,
+        width,
+        height,
+        null
+    )
+
+    val out = java.io.ByteArrayOutputStream()
+    yuvImage.compressToJpeg(android.graphics.Rect(0, 0, width, height), 100, out)
+
+    val imageBytes = out.toByteArray()
+    return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+        ?: throw IllegalStateException("Failed to convert YUV to Bitmap")
 }
 
 private fun evaluateFacePosition(faces: List<MlKitFaceDetector.FaceInfo>, imageWidth: Int, imageHeight: Int): MlKitFaceDetector.FacePositionStatus {

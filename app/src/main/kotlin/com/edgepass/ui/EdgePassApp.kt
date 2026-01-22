@@ -114,7 +114,16 @@ fun EdgePassApp() {
 
                                 val croppedBytes = if (detectedFaces.isNotEmpty()) {
                                     val face = detectedFaces.first()
-                                    cropToExpandedBox(originalBitmap!!, face.expandedBox)
+                                    val targetRatio = getAspectRatioForStandard(selectedStandard)
+                                    val adjustedBox = adjustRectToAspectRatio(
+                                        face.expandedBox,
+                                        targetRatio,
+                                        originalBitmap!!.width,
+                                        originalBitmap!!.height
+                                    )
+                                    Log.d("EdgePassApp", "Adjusted crop box from ${face.expandedBox} to $adjustedBox (Ratio: $targetRatio)")
+
+                                    cropToExpandedBox(originalBitmap!!, adjustedBox)
                                 } else {
                                     capturedImageBytes!!
                                 }
@@ -128,8 +137,6 @@ fun EdgePassApp() {
                                     val face = detectedFaces.first()
                                     face.expandedBox.centerY()
                                 } else null
-
-                                Log.d("EdgePassApp", "Expanded box center: $faceCenterX, $faceCenterY")
 
                                 val result = processor.generate(
                                     croppedBytes,
@@ -166,6 +173,67 @@ fun EdgePassApp() {
             }
         }
     }
+}
+
+private fun getAspectRatioForStandard(standard: Int): Float {
+    return when (standard) {
+        PassportProcessor.STANDARD_SAUDI_EVISA,
+        PassportProcessor.STANDARD_US,
+        PassportProcessor.STANDARD_SCHENGEN,
+        PassportProcessor.STANDARD_CUSTOM -> 1.0f
+
+        PassportProcessor.STANDARD_GENERAL_ID -> 450f / 550f
+        PassportProcessor.STANDARD_UK -> 350f / 450f
+        PassportProcessor.STANDARD_INDIA -> 350f / 500f
+        else -> 1.0f
+    }
+}
+
+private fun adjustRectToAspectRatio(rect: RectF, targetRatio: Float, imageWidth: Int, imageHeight: Int): RectF {
+    val currentWidth = rect.width()
+    val currentHeight = rect.height()
+    val currentRatio = currentWidth / currentHeight
+
+    var newLeft = rect.left
+    var newTop = rect.top
+    var newRight = rect.right
+    var newBottom = rect.bottom
+
+    if (currentRatio > targetRatio) {
+        val targetHeight = currentWidth / targetRatio
+        val heightDiff = targetHeight - currentHeight
+        newTop -= heightDiff / 2
+        newBottom += heightDiff / 2
+    } else {
+        val targetWidth = currentHeight * targetRatio
+        val widthDiff = targetWidth - currentWidth
+        newLeft -= widthDiff / 2
+        newRight += widthDiff / 2
+    }
+
+    if (newLeft < 0) {
+        newRight += -newLeft
+        newLeft = 0f
+    }
+    if (newTop < 0) {
+        newBottom += -newTop
+        newTop = 0f
+    }
+    if (newRight > imageWidth) {
+        newLeft -= (newRight - imageWidth)
+        newRight = imageWidth.toFloat()
+    }
+    if (newBottom > imageHeight) {
+        newTop -= (newBottom - imageHeight)
+        newBottom = imageHeight.toFloat()
+    }
+
+    newLeft = newLeft.coerceAtLeast(0f)
+    newTop = newTop.coerceAtLeast(0f)
+    newRight = newRight.coerceAtMost(imageWidth.toFloat())
+    newBottom = newBottom.coerceAtMost(imageHeight.toFloat())
+
+    return RectF(newLeft, newTop, newRight, newBottom)
 }
 
 private fun cropToExpandedBox(bitmap: Bitmap, expandedBox: RectF): ByteArray {
